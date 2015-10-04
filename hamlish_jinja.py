@@ -152,6 +152,8 @@ class Hamlish(object):
     INLINE_DATA_SEP = ' << '
 
     SELF_CLOSING_TAG = '.'
+    TRIM_INNER_WHITESPACE_TAG = '<'
+    TRIM_OUTER_WHITESPACE_TAG = '>'
     JINJA_TAG = '-'
     JINJA_VARIABLE = '='
     HTML_TAG = '%'
@@ -392,13 +394,17 @@ class Hamlish(object):
 
     def _parse_html(self, lineno, line):
 
-        m = re.match('^(\w+)(.*)$', line[1:])
+        whitespace_tags = self.TRIM_INNER_WHITESPACE_TAG + self.TRIM_OUTER_WHITESPACE_TAG
+        whitespace_tags = re.escape(whitespace_tags)
+
+        m = re.match('^(\w+)([^%s]*)([%s]*)$' % (whitespace_tags, whitespace_tags), line[1:])
         if m is None:
             raise TemplateSyntaxError(
                     'Expected html tag, got "%s".' % line, lineno)
 
         tag = m.group(1)
         attrs = m.group(2)
+        whitespace_modifiers = m.group(3)
 
 
         self_closing = False
@@ -408,15 +414,22 @@ class Hamlish(object):
         elif tag in self._self_closing_html_tags:
             self_closing = True
 
+        trim_inner_whitespace = False
+        trim_outer_whitespace = False
+        if whitespace_modifiers:
+            if self.TRIM_INNER_WHITESPACE_TAG in whitespace_modifiers:
+                trim_inner_whitespace = True
+            if self.TRIM_OUTER_WHITESPACE_TAG in whitespace_modifiers:
+                trim_outer_whitespace = True
+
         if attrs.startswith(self.ID_SHORTCUT) or \
             attrs.startswith(self.CLASS_SHORTCUT):
 
             attrs = self._parse_shortcut_attributes(attrs)
 
-
         if self_closing:
-            return SelfClosingHTMLTag(tag, attrs)
-        return HTMLTag(tag, attrs)
+            return SelfClosingHTMLTag(tag, attrs, trim_inner_whitespace, trim_outer_whitespace)
+        return HTMLTag(tag, attrs, trim_inner_whitespace, trim_outer_whitespace)
 
 
     def _parse_shortcut_attributes(self, attrs):
@@ -572,9 +585,11 @@ class EmptyLine(Node):
 
 class HTMLTag(Node):
 
-    def __init__(self, tag_name, attrs):
+    def __init__(self, tag_name, attrs, trim_inner_whitespace, trim_outer_whitespace):
         self.tag_name = tag_name
         self.attrs = attrs
+        self.trim_inner_whitespace = trim_inner_whitespace
+        self.trim_outer_whitespace = trim_outer_whitespace
         super(HTMLTag, self).__init__()
 
 
@@ -748,9 +763,11 @@ class Output(object):
             self.write_close_node(node.children[0])
 
 
-    def _create(self, nodes, depth=0):
+    def _create(self, nodes, depth=0, trim_outer_whitespace=False):
 
         for node in nodes:
+            trim_inner_whitespace = getattr(node, 'trim_inner_whitespace', False)
+            trim_outer_whitespace = getattr(node, 'trim_outer_whitespace', False) or trim_outer_whitespace
 
             if isinstance(node, EmptyLine):
                 if self.debug:
@@ -779,20 +796,26 @@ class Output(object):
             else:
 
                 if not isinstance(node, PreformatedText):
-                    self.write_indent(depth)
+                    if not trim_outer_whitespace:
+                        self.write_indent(depth)
                 self.write_open_node(node)
 
                 if isinstance(node, SelfClosingTag):
-                    self.write_newline()
+                    if not trim_outer_whitespace:
+                        self.write_newline()
                 elif isinstance(node, PreformatedText):
                     self.write('\n')
                 elif isinstance(node, (JinjaTag, HTMLTag, NestedTags)) and not node.has_children():
                     pass
+                elif isinstance(node, TextNode):
+                    if not trim_outer_whitespace:
+                        self.write_newline()
                 else:
-                    self.write_newline()
+                    if not trim_inner_whitespace:
+                        self.write_newline()
 
             if node.children and not isinstance(node, ExtendedJinjaTag):
-                self._create(node.children, depth+1)
+                self._create(node.children, depth+1, trim_inner_whitespace)
 
 
 
@@ -808,12 +831,14 @@ class Output(object):
             elif isinstance(node, (JinjaTag, HTMLTag, ExtendedJinjaTag, NestedTags)):
 
                 if not (self.debug or (isinstance(node, NestedTags) and not node.has_children())):
-                    self.write_indent(depth)
+                    if not trim_inner_whitespace:
+                        self.write_indent(depth)
                 self.write_close_node(node)
 
 
                 if not self.debug or (isinstance(node, NestedTags) and not node.has_children()):
-                    self.write_newline()
+                    if not trim_outer_whitespace:
+                        self.write_newline()
 
             if self.debug:
                 #readd the whitespace after the end tag
