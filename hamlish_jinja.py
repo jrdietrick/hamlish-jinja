@@ -762,6 +762,9 @@ class Output(object):
         elif isinstance(node, ExtendedJinjaTag):
             self.write_close_node(node.children[0])
 
+    def try_chomp_back_newline(self):
+        if self._newline and self.buffer and self.buffer[-1] == self._newline:
+            self.buffer = self.buffer[:-1]
 
     def _create(self, nodes, depth=0, trim_outer_whitespace=False):
 
@@ -796,7 +799,9 @@ class Output(object):
             else:
 
                 if not isinstance(node, PreformatedText):
-                    if not trim_outer_whitespace:
+                    if trim_outer_whitespace:
+                        self.try_chomp_back_newline()
+                    else:
                         self.write_indent(depth)
                 self.write_open_node(node)
 
@@ -814,8 +819,10 @@ class Output(object):
                     if not trim_inner_whitespace:
                         self.write_newline()
 
+            child_depth = depth if trim_inner_whitespace else depth + 1
+
             if node.children and not isinstance(node, ExtendedJinjaTag):
-                self._create(node.children, depth+1, trim_inner_whitespace)
+                self._create(node.children, child_depth, trim_inner_whitespace)
 
 
 
@@ -831,7 +838,9 @@ class Output(object):
             elif isinstance(node, (JinjaTag, HTMLTag, ExtendedJinjaTag, NestedTags)):
 
                 if not (self.debug or (isinstance(node, NestedTags) and not node.has_children())):
-                    if not trim_inner_whitespace:
+                    if trim_inner_whitespace:
+                        self.try_chomp_back_newline()
+                    else:
                         self.write_indent(depth)
                 self.write_close_node(node)
 
